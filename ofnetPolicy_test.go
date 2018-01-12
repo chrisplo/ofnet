@@ -69,6 +69,9 @@ func TestPolicyAddDelete(t *testing.T) {
 
 	// Create a vlan for the endpoint
 	ofnetAgent.AddNetwork(1, 1, "", "default")
+	ofnetAgent.AddNetwork(2, 2, "", "second")
+	ofnetAgent.AddNetwork(4, 4, "", "third")
+	ofnetAgent.AddNetwork(8, 8, "", "fourth")
 
 	macAddr, _ := net.ParseMAC("00:01:02:03:04:05")
 	endpoint := EndpointInfo{
@@ -95,6 +98,8 @@ func TestPolicyAddDelete(t *testing.T) {
 		DstEndpointGroup: 200,
 		SrcIpAddr:        "10.10.10.10/24",
 		DstIpAddr:        "10.1.1.1/24",
+		SrcTenant:        "default",
+		DstTenant:        "second",
 		IpProtocol:       6,
 		DstPort:          100,
 		SrcPort:          200,
@@ -118,6 +123,8 @@ func TestPolicyAddDelete(t *testing.T) {
 		SrcIpAddr:        "20.20.20.20/24",
 		DstIpAddr:        "20.2.2.2/24",
 		IpProtocol:       17,
+		SrcTenant:        "third",
+		DstTenant:        "fourth",
 		DstPort:          300,
 		SrcPort:          400,
 		Action:           "deny",
@@ -132,44 +139,103 @@ func TestPolicyAddDelete(t *testing.T) {
 		return
 	}
 
+	// tenant second is allowed to talk to group in tenant third
+	tenantIngressRule := &OfnetPolicyRule{
+		RuleId:           "tenantIngressRule",
+		Priority:         50,
+		DstEndpointGroup: 400,
+		IpProtocol:       6,
+		SrcTenant:        "second",
+		DstTenant:        "third",
+		Action:           "allow",
+	}
+	log.Infof("Adding tenant ingress rule: %+v", udpRule)
+	err = ofnetMaster.AddRule(tenantIngressRule)
+	if err != nil {
+		t.Errorf("Error installing tenant ingress rule {%+v}. Err: %v", tenantIngressRule, err)
+		return
+	}
+
 	// Get all the flows
 	flowList, err := ofctlFlowDump(brName)
 	if err != nil {
 		t.Errorf("Error getting flow entries. Err: %v", err)
 		return
 	}
-	// verify src group flow
-	srcGrpFlowMatch := fmt.Sprintf("priority=10,in_port=12 actions=write_metadata:0x100640000/0xff7fff0000")
-	if !ofctlFlowMatch(flowList, VLAN_TBL_ID, srcGrpFlowMatch) {
-		fmt.Printf("Flows:\n%+v", flowList)
-		t.Fatalf("Could not find the flow %s on ovs %s", srcGrpFlowMatch, brName)
+	log.Infof("Flow dump:")
+	log.Infof("==========")
+	for _, f := range flowList {
+		log.Infof("%+v", f)
 	}
 
+	// verify src group flow
+	// tenant+group: format((1<<(1+30+16))+(100<<(1+30)), 'x')
+	// tenant mask: (((1<<14))-1)<<(1+30+16) = 2305702271725338624
+	// group mask: (((1<<16))-1)<<(30+1) = 140735340871680
+	// mask: format(2305702271725338624 + 140735340871680, 'x')
+	srcGrpFlowMatch := fmt.Sprintf("priority=10,in_port=12 actions=write_metadata:0x803200000000/0x1fffffff80000000")
+	if !ofctlFlowMatch(flowList, VLAN_TBL_ID, srcGrpFlowMatch) {
+		t.Fatalf("Could not find the flow %s on ovs %s", srcGrpFlowMatch, brName)
+	}
 	log.Infof("Found src group %s on ovs %s", srcGrpFlowMatch, brName)
 
 	// verify dst group flow
-	dstGrpFlowMatch := fmt.Sprintf("priority=100,ip,metadata=0x100000000/0xff00000000,nw_dst=10.2.2.2 actions=write_metadata:0xc8/0xfffe")
+	// tenant+group: format((1<<(1+16))+(100<<1), 'x')
+	// tenant mask: (((1<<14))-1)<<(1+16) = 2147352576
+	// group mask: (((1<<16))-1)<<1 = 131070
+	// mask: format(2147352576 + 131070, 'x')
+	dstGrpFlowMatch := fmt.Sprintf("priority=100,ip,nw_dst=10.2.2.2 actions=write_metadata:0x200c8/0x7ffffffe")
 	if !ofctlFlowMatch(flowList, DST_GRP_TBL_ID, dstGrpFlowMatch) {
 		t.Fatalf("Could not find the flow %s on ovs %s", dstGrpFlowMatch, brName)
 	}
-
 	log.Infof("Found dst group %s on ovs %s", dstGrpFlowMatch, brName)
 
+	// source tenant mask: (((1<<14))-1)<<(1+30+16) = 2305702271725338624
+	// source group mask: ( (1<<16) -1 )<<(30+1) = 140735340871680
+	// dest tenant mask: (((1<<14))-1)<<(1+16) = 2147352576
+	// dest group mask: ( (1<<16) -1 )<<1 = 131070
+	// mask: format(2305702271725338624 + 140735340871680 + 2147352576 + 131070, 'x')
+	metadataMask := "0x1ffffffffffffffe"
+
 	// verify tcp rule flow entry exists
-	tcpFlowMatch := fmt.Sprintf("priority=110,tcp,metadata=0x640190/0x7ffffffe,nw_src=10.10.10.0/24,nw_dst=10.1.1.0/24,tp_src=200,tp_dst=100")
+	// tenant 1 group 100 source + tenant 2 group 200 dest:
+	//   format( (1<<(1+30+16)) + (100<<(30+1)) + (2<<(1+16)) + (200<<1) , 'x')
+	tcpFlowMatch := fmt.Sprintf("priority=110,tcp,metadata=0x803200040190/%s,nw_src=10.10.10.0/24,nw_dst=10.1.1.0/24,tp_src=200,tp_dst=100", metadataMask)
 	if !ofctlFlowMatch(flowList, POLICY_TBL_ID, tcpFlowMatch) {
 		t.Fatalf("Could not find the flow %s on ovs %s", tcpFlowMatch, brName)
 	}
-
 	log.Infof("Found tcp rule %s on ovs %s", tcpFlowMatch, brName)
 
 	// verify udp rule flow
-	udpFlowMatch := fmt.Sprintf("priority=110,udp,metadata=0x12c0320/0x7ffffffe,nw_src=20.20.20.0/24,nw_dst=20.2.2.0/24,tp_src=400,tp_dst=300")
+	// tenant 3 group 300 source + tenant 4 group 400 dest:
+	//   format( (3<<(1+30+16)) + (300<<(30+1)) + (4<<(1+16)) + (400<<1) , 'x')
+	udpFlowMatch := fmt.Sprintf("priority=110,udp,metadata=0x1809600080320/%s,nw_src=20.20.20.0/24,nw_dst=20.2.2.0/24,tp_src=400,tp_dst=300", metadataMask)
 	if !ofctlFlowMatch(flowList, POLICY_TBL_ID, udpFlowMatch) {
 		t.Fatalf("Could not find the flow %s on ovs %s", udpFlowMatch, brName)
 	}
-
 	log.Infof("Found udp rule %s on ovs %s", udpFlowMatch, brName)
+
+	// source tenant mask: (((1<<14))-1)<<(1+30+16) = 2305702271725338624
+	// dest tenant mask: (((1<<14))-1)<<(1+16) = 2147352576
+	// dest group mask: ( (1<<16) -1 )<<1 = 131070
+	// mask: format(2305702271725338624 + 2147352576 + 131070, 'x')
+	fromTenantMetadataMask := "0x1fff80007ffffffe"
+
+	// verify tenant ingress rule flow
+	// tenant 2 source + tenant 3 group 400 dest:
+	//   format( (2<<(1+30+16)) + (3<<(1+16)) + (400<<1) , 'x')
+	tenantIngressFlowMatch := fmt.Sprintf("priority=60,tcp,metadata=0x1000000060320/%s", fromTenantMetadataMask)
+	if !ofctlFlowMatch(flowList, POLICY_TBL_ID, tenantIngressFlowMatch) {
+		t.Fatalf("Could not find the flow %s on ovs %s", tenantIngressFlowMatch, brName)
+	}
+	log.Infof("Found udp rule %s on ovs %s", tenantIngressFlowMatch, brName)
+
+	// verify output flow
+	outputFlowMatch := fmt.Sprintf("priority=100,ip,nw_dst=10.2.2.2")
+	if !ofctlFlowMatch(flowList, IP_TBL_ID, outputFlowMatch) {
+		t.Fatalf("Could not find the flow %s on ovs %s", outputFlowMatch, brName)
+	}
+	log.Infof("Found src group %s on ovs %s", outputFlowMatch, brName)
 
 	// Delete policies
 	err = ofnetMaster.DelRule(tcpRule)
