@@ -277,7 +277,8 @@ func TestSvcProxyInterface(t *testing.T) {
 	rpcPort := uint16(9600)
 	ovsPort := uint16(9601)
 	lclIP := net.ParseIP("10.10.10.10")
-	ofnetAgent, err := NewOfnetAgent("", "vrouter", lclIP, rpcPort, ovsPort, nil)
+	ofnetAgent, err := NewOfnetAgent("", "vrouter", lclIP, rpcPort, ovsPort,
+		nil, OFNET_AGENT_ENDPOINT_IPS_ARE_NOT_UNIQUE_PARAM)
 	if err != nil {
 		t.Fatalf("Error creating ofnet agent. Err: %v", err)
 	}

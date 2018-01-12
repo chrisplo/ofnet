@@ -51,7 +51,10 @@ func NewOvsSwitch(bridgeName, netType, localIP string) (*OvsSwitch, error) {
 	sw.ovsdbDriver = ovsdbDriver.NewOvsDriver(bridgeName)
 
 	// Create an ofnet agent
-	sw.ofnetAgent, err = ofnet.NewOfnetAgent(netType, net.ParseIP(localIP), ofnet.OFNET_AGENT_PORT, OVS_CTRLER_PORT)
+	sw.ofnetAgent, err = ofnet.NewOfnetAgent(netType, net.ParseIP(localIP),
+		ofnet.OFNET_AGENT_PORT, OVS_CTRLER_PORT,
+		OFNET_AGENT_ENDPOINT_IPS_ARE_NOT_UNIQUE_PARAM)
+
 	if err != nil {
 		log.Fatalf("Error initializing ofnet")
 		return nil, err

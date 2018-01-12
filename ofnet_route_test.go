@@ -42,12 +42,13 @@ func TestOfnetVrouteAddDelete(t *testing.T) {
 			}
 			hostPvtIP := net.ParseIP(fmt.Sprintf("172.20.20.%d", uint32(NUM_AGENT+2)))
 			endpoint := EndpointInfo{
-				PortNo:    uint32(NUM_AGENT + 2),
-				MacAddr:   macAddr,
-				Vlan:      1,
-				IpAddr:    ipAddr,
-				Ipv6Addr:  ipv6Addr,
-				HostPvtIP: hostPvtIP,
+				EndpointGroup: 1,
+				PortNo:        uint32(NUM_AGENT + 2),
+				MacAddr:       macAddr,
+				Vlan:          1,
+				IpAddr:        ipAddr,
+				Ipv6Addr:      ipv6Addr,
+				HostPvtIP:     hostPvtIP,
 			}
 
 			log.Infof("Installing local vrouter endpoint: %+v", endpoint)
@@ -70,12 +71,16 @@ func TestOfnetVrouteAddDelete(t *testing.T) {
 			if err != nil {
 				t.Errorf("Error getting flow entries. Err: %v", err)
 			}
+			log.Infof("Flow dump:")
+			log.Infof("==========")
+			for _, f := range flowList {
+				log.Infof("%+v", f)
+			}
 
-			log.Infof("Flowlist: %v", flowList)
 			// verify ingress host NAT flows
 			hpInMatch := fmt.Sprintf("priority=99,in_port=%d actions=goto_table:%d", testHostPort+i, HOST_DNAT_TBL_ID)
 			verifyHostNAT(t, flowList, 0, hpInMatch, true)
-			hpDnatMatch := fmt.Sprintf("priority=100,ip,in_port=%d,nw_dst=172.20.20.%d actions=set_field:02:02:02:%02x:%02x:%02x->eth_dst,set_field:10.10.%d.%d->ip_dst,write_metadata:0x100000000/0xff00000000,goto_table:%d", testHostPort+i, NUM_AGENT+2, i+1, i+1, i+1, i+1, i+1, SRV_PROXY_SNAT_TBL_ID)
+			hpDnatMatch := fmt.Sprintf("priority=100,ip,in_port=%d,nw_dst=172.20.20.%d actions=set_field:02:02:02:%02x:%02x:%02x->eth_dst,set_field:10.10.%d.%d->ip_dst,write_metadata:0x20000/0x7ffe0000,goto_table:%d", testHostPort+i, NUM_AGENT+2, i+1, i+1, i+1, i+1, i+1, SRV_PROXY_SNAT_TBL_ID)
 			verifyHostNAT(t, flowList, HOST_DNAT_TBL_ID, hpDnatMatch, true)
 			// verify egress host NAT flows
 			ipMiss := fmt.Sprintf("priority=1 actions=goto_table:%d", HOST_SNAT_TBL_ID)
@@ -87,24 +92,29 @@ func TestOfnetVrouteAddDelete(t *testing.T) {
 			verifyHostNAT(t, flowList, HOST_SNAT_TBL_ID, denyFlow, true)
 
 			// verify flow entry exists
+			missingFlow := false
 			for j := 0; j < NUM_AGENT; j++ {
 				k := j + 1
-				ipFlowMatch := fmt.Sprintf("priority=100,ip,metadata=0x100000000/0xff00000000,nw_dst=10.10.%d.%d", k, k)
+				ipFlowMatch := fmt.Sprintf("priority=100,ip,metadata=0x20000/0x7ffe0000,nw_dst=10.10.%d.%d", k, k)
 				ipTableId := IP_TBL_ID
-				if !ofctlFlowMatch(flowList, ipTableId, ipFlowMatch) {
-					t.Errorf("Could not find the route %s on ovs %s", ipFlowMatch, brName)
+				if ofctlFlowMatch(flowList, ipTableId, ipFlowMatch) {
+					log.Infof("Found ip table flow %s on ovs %s", ipFlowMatch, brName)
+				} else {
+					t.Errorf("Could not find the ip table route %s on ovs %s", ipFlowMatch, brName)
+					missingFlow = true
 				}
-				log.Infof("Found ipflow %s on ovs %s", ipFlowMatch, brName)
 
 				if k%2 == 0 {
-					ipv6FlowMatch := fmt.Sprintf("priority=100,ipv6,metadata=0x100000000/0xff00000000,ipv6_dst=2016::%d:%d", k, k)
+					ipv6FlowMatch := fmt.Sprintf("priority=100,ipv6,metadata=0x20000/0x7ffe0000,ipv6_dst=2016::%d:%d", k, k)
 					if !ofctlFlowMatch(flowList, ipTableId, ipv6FlowMatch) {
-						t.Errorf("Could not find IPv6 route %s on ovs %s", ipv6FlowMatch, brName)
-						return
+						t.Errorf("Could not find iptable IPv6 route %s on ovs %s", ipv6FlowMatch, brName)
+						missingFlow = true
 					}
-					log.Infof("Found IPv6 ipflow %s on ovs %s", ipv6FlowMatch, brName)
+					log.Infof("Found iptable IPv6 ipflow %s on ovs %s", ipv6FlowMatch, brName)
 				}
-
+			}
+			if missingFlow {
+				return
 			}
 		}
 
@@ -150,7 +160,7 @@ func TestOfnetVrouteAddDelete(t *testing.T) {
 			// verify ingress host NAT flows
 			hpInMatch := fmt.Sprintf("priority=99,in_port=%d actions=goto_table:%d", testHostPort+i, HOST_DNAT_TBL_ID)
 			verifyHostNAT(t, flowList, 0, hpInMatch, false)
-			hpDnatMatch := fmt.Sprintf("priority=100,ip,in_port=%d,nw_dst=172.20.20.%d actions=set_field:02:02:02:%02x:%02x:%02x->eth_dst,set_field:10.10.%d.%d->ip_dst,write_metadata:0x100000000/0xff00000000,goto_table:%d", testHostPort+i, NUM_AGENT+2, i+1, i+1, i+1, i+1, i+1, SRV_PROXY_SNAT_TBL_ID)
+			hpDnatMatch := fmt.Sprintf("priority=100,ip,in_port=%d,nw_dst=172.20.20.%d actions=set_field:02:02:02:%02x:%02x:%02x->eth_dst,set_field:10.10.%d.%d->ip_dst,write_metadata:0x800000000000/0x1fff800000000000,goto_table:%d", testHostPort+i, NUM_AGENT+2, i+1, i+1, i+1, i+1, i+1, SRV_PROXY_SNAT_TBL_ID)
 			verifyHostNAT(t, flowList, HOST_DNAT_TBL_ID, hpDnatMatch, false)
 			hostSnat := fmt.Sprintf("priority=100,ip,in_port=%d actions=set_field:00:11:22:33:44:%02x->eth_dst,set_field:172.20.20.%d->ip_src,output:%d", NUM_AGENT+2, i, NUM_AGENT+2, testHostPort+i)
 			verifyHostNAT(t, flowList, HOST_SNAT_TBL_ID, hostSnat, false)
@@ -160,13 +170,13 @@ func TestOfnetVrouteAddDelete(t *testing.T) {
 			// verify flow entry exists
 			for j := 0; j < NUM_AGENT; j++ {
 				k := j + 1
-				ipFlowMatch := fmt.Sprintf("priority=100,ip,metadata=0x100000000/0xff00000000,nw_dst=10.10.%d.%d", k, k)
+				ipFlowMatch := fmt.Sprintf("priority=100,ip,metadata=0x800000000000/0x1fff800000000000,nw_dst=10.10.%d.%d", k, k)
 				ipTableId := IP_TBL_ID
 				if ofctlFlowMatch(flowList, ipTableId, ipFlowMatch) {
 					t.Errorf("Still found the flow %s on ovs %s", ipFlowMatch, brName)
 				}
 				if k%2 == 0 {
-					ipv6FlowMatch := fmt.Sprintf("priority=100,ipv6,metadata=0x100000000/0xff00000000,ipv6_dst=2016::%d:%d", k, k)
+					ipv6FlowMatch := fmt.Sprintf("priority=100,ipv6,metadata=0x800000000000/0x1fff800000000000,ipv6_dst=2016::%d:%d", k, k)
 					if ofctlFlowMatch(flowList, ipTableId, ipv6FlowMatch) {
 						t.Errorf("Still found the flow %s on ovs %s", ipv6FlowMatch, brName)
 					}
@@ -174,7 +184,7 @@ func TestOfnetVrouteAddDelete(t *testing.T) {
 			}
 		}
 
-		log.Infof("Verified all flows are deleted")
+		log.Infof("Verified all flows are deleted for TestOfnetVrouteAddDelete")
 	}
 }
 
