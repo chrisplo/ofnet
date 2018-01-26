@@ -394,8 +394,10 @@ func (self *PolicyAgent) AddRule(rule *OfnetPolicyRule, ret *bool) error {
 	}
 	if rule.SrcEndpointGroup != 0 {
 		if rule.SrcVrf == "" {
-			log.Errorf("Source group %v was provided without tenant",
-				rule.DstEndpointGroup)
+			errMsg := fmt.Sprintf("Source group %v was provided without VRF",
+				rule.SrcEndpointGroup)
+			log.Errorf(errMsg)
+			return errors.New(errMsg)
 		}
 
 		md, mdm = updateMetadata(SrcGroupMetadata(*srcVrfId, rule.SrcEndpointGroup))
@@ -411,8 +413,10 @@ func (self *PolicyAgent) AddRule(rule *OfnetPolicyRule, ret *bool) error {
 	}
 	if rule.DstEndpointGroup != 0 {
 		if rule.DstVrf == "" {
-			log.Errorf("Destination group %v was provided without tenant",
+			errMsg := fmt.Sprintf("Destination group %v was provided without VRF",
 				rule.DstEndpointGroup)
+			log.Errorf(errMsg)
+			return errors.New(errMsg)
 		}
 
 		md, mdm = updateMetadata(DstGroupMetadata(*dstVrfId, rule.DstEndpointGroup))
